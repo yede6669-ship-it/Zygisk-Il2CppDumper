@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <android/log.h>
+#include <cstdio>
 #include "zygisk.hpp"
 #include "dobby.h"
 
