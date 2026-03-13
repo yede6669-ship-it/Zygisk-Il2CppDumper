@@ -1,30 +1,27 @@
 #include <jni.h>
+#include <string>
 #include <android/log.h>
 #include <cstdio>
 #include "zygisk.hpp"
-#include "il2cpp_dump.h" // 引用你项目中原有的脱壳头文件
+#include "il2cpp_dump.h"
 
-#define LOG_TAG "Il2CppDumper-API"
+#define LOG_TAG "Il2CppManager"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-// ----------------------------------------------------------------
-// JNI 导出函数
-// 对应 Java 类: com.unpacker.helper.DumpUtils
-// 方法名: nativeTriggerDump
-// ----------------------------------------------------------------
+// 静态变量存储目标包名
+static std::string target_package = "";
+
 extern "C" JNIEXPORT void JNICALL
-Java_com_unpacker_helper_DumpUtils_nativeTriggerDump(JNIEnv *env, jclass clazz, jstring save_path) {
-    const char *path = env->GetStringUTFChars(save_path, nullptr);
+Java_com_unpacker_helper_DumpUtils_setTargetAndDump(JNIEnv *env, jclass clazz, jstring packageName) {
+    const char *pkg = env->GetStringUTFChars(packageName, nullptr);
+    target_package = pkg;
     
-    LOGI("API Triggered: Starting dump to %s", path);
+    LOGI("已设置目标应用: %s，准备执行 Dump 逻辑", pkg);
     
-    // 调用项目中原有的 il2cpp 脱壳核心逻辑
-    // 假设你的 il2cpp_dump 支持传入路径，如果不支持，可不传参数
+    // 执行 il2cpp dump 核心逻辑
     il2cpp_dump(); 
     
-    LOGI("Dump Task Finished.");
-    
-    env->ReleaseStringUTFChars(save_path, path);
+    env->ReleaseStringUTFChars(packageName, pkg);
 }
 
 class MyModule : public zygisk::ModuleBase {
@@ -34,9 +31,9 @@ public:
         this->env = env;
     }
 
-    // 这里留空，不再自动触发，等待 API 调用
-    void postAppSpecialize(const zygisk::AppSpecializeArgs*) override {
-        LOGI("Module injected, waiting for API call...");
+    void postAppSpecialize(const zygisk::AppSpecializeArgs* args) override {
+        // Zygisk 注入时可以获取当前进程名进行校验
+        LOGI("模块已注入进程空间");
     }
 
 private:
