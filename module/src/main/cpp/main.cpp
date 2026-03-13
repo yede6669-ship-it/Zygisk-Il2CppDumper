@@ -1,39 +1,62 @@
 #include <jni.h>
+#include <android/log.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <thread>
 #include <string>
-#include <cstdio>
+#include <cstring>
+
+// 核心头文件引用
 #include "zygisk.hpp"
+#include "il2cpp_dump.h"
 
-// 信号文件的位置
-#define SIGNAL_FILE "/data/local/tmp/dump_signal"
+// 重新定义缺失的日志宏
+#define LOG_TAG "IL2CPP_DUMPER"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// 这就是我们的 Hook 函数
-void hooked_onItemClick(JNIEnv* env, jobject thiz, jobject parent, jobject view, jint position, jlong id) {
-    // 1. 获取 MainActivity 的类对象
-    jclass mainActivityClass = env->GetObjectClass(thiz);
+// 监听线程：负责接收来自辅助 App 的信号
+void listen_for_api_commands() {
+    int server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (server_fd < 0) return;
+
+    struct sockaddr_un addr;
+    std::memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
     
-    // 2. 找到 packageNames 字段
-    jfieldID fieldId = env->GetFieldID(mainActivityClass, "packageNames", "Ljava/util/List;");
-    jobject listObject = env->GetObjectField(thiz, fieldId);
-    
-    // 3. 调用 List.get(position) 拿到包名
-    jclass listClass = env->FindClass("java/util/List");
-    jmethodID getMethod = env->GetMethodID(listClass, "get", "(I)Ljava/lang/Object;");
-    jstring pkgName = (jstring)env->CallObjectMethod(listObject, getMethod, position);
-    
-    const char* pkgStr = env->GetStringUTFChars(pkgName, nullptr);
-    
-    // 4. 写入信号文件，供游戏进程读取
-    FILE* f = fopen(SIGNAL_FILE, "w");
-    if (f) {
-        fprintf(f, "%s", pkgStr);
-        fclose(f);
-        // 赋予权限，确保所有进程都能读写
-        chmod(SIGNAL_FILE, 0777);
+    // 使用抽象命名空间（以 \0 开头）
+    const char* socket_name = "\0il2cpp_dump_socket";
+    std::memcpy(addr.sun_path, socket_name, 19);
+
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(server_fd);
+        return;
     }
-    
-    env->ReleaseStringUTFChars(pkgName, pkgStr);
+
+    if (listen(server_fd, 5) < 0) {
+        close(server_fd);
+        return;
+    }
+
+    LOGI("API 监听已启动...");
+
+    while (true) {
+        int client_fd = accept(server_fd, nullptr, nullptr);
+        if (client_fd > 0) {
+            char buffer[512] = {0};
+            ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+            if (bytes_read > 0) {
+                LOGI("收到指令，开始执行 Dump 至: %s", buffer);
+                // 调用核心脱壳逻辑
+                il2cpp_dump(buffer); 
+            }
+            close(client_fd);
+        }
+    }
 }
 
+// Zygisk 模块实现
 class MyModule : public zygisk::ModuleBase {
 public:
     void onLoad(zygisk::Api* api, JNIEnv* env) override {
@@ -42,25 +65,14 @@ public:
     }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs* args) override {
-        const char* process = env->GetStringUTFChars(args->nice_name, nullptr);
-        
-        // 识别辅助 App：包名必须匹配
-        if (process && std::string(process) == "com.unpacker.helper") {
-            // 找到匿名内部类 OnItemClickListener（通常是 MainActivity$1）
-            jclass listenerClass = env->FindClass("com/unpacker/helper/MainActivity$1");
-            if (listenerClass) {
-                JNINativeMethod methods[] = {
-                    {"onItemClick", "(Landroid/widget/AdapterView;Landroid/view/View;IJ)V", (void*)hooked_onItemClick}
-                };
-                // 强行注册，接管原有的 Java 点击逻辑
-                env->RegisterNatives(listenerClass, methods, 1);
-            }
-        }
-        env->ReleaseStringUTFChars(args->nice_name, process);
+        // 确保在独立线程中启动监听，避免阻塞游戏主线程
+        std::thread(listen_for_api_commands).detach();
     }
+
 private:
     zygisk::Api* api;
     JNIEnv* env;
 };
 
+// 注册模块
 REGISTER_ZYGISK_MODULE(MyModule)
