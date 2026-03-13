@@ -1,20 +1,24 @@
 #include <jni.h>
 #include <android/log.h>
-#include <cstdio>
 #include <string>
 #include "zygisk.hpp"
-#include "il2cpp_dump.h"
+#include "il2cpp_dump.h" // 仅保留 il2cpp 相关的头文件
 
-#define LOG_TAG "Il2CppManager"
+#define LOG_TAG "IL2CPP_DUMPER"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_unpacker_helper_DumpUtils_nativeTriggerDump(JNIEnv *env, jclass clazz, jstring save_path) {
+    if (save_path == nullptr) return;
+
     const char *path = env->GetStringUTFChars(save_path, nullptr);
     if (path != nullptr) {
-        LOGI("API 触发：准备脱壳到目录 %s", path);
-        // 传入路径参数，解决之前的编译错误
+        LOGI("收到指令：开始 IL2CPP Dump，保存至 %s", path);
+        
+        // 调用核心 il2cpp 提取逻辑
+        // 这个函数会寻找 libil2cpp.so 并导出 metadata 和 dummy dll
         il2cpp_dump(path); 
+        
         env->ReleaseStringUTFChars(save_path, path);
     }
 }
@@ -25,12 +29,7 @@ public:
         this->api = api;
         this->env = env;
     }
-    void postAppSpecialize(const zygisk::AppSpecializeArgs*) override {
-        LOGI("模块已加载到目标进程");
-    }
-private:
-    zygisk::Api* api;
-    JNIEnv* env;
+    // postAppSpecialize 保持空逻辑，避免自动触发
 };
 
 REGISTER_ZYGISK_MODULE(MyModule)
